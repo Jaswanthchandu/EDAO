@@ -1,0 +1,261 @@
+---
+title: "IST-687 Project Code - Group 5"
+output: html_notebook
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Ctrl+Shift+Enter*. 
+
+```{r}
+#Installing the required packages and loading the libraries
+
+#install.packages("arrow")
+#install.packages("tidyverse")
+#install.packages("lubridate")
+#install.packages("caret")
+#install.packages("MASS")
+
+library(arrow)
+library(tidyverse)
+library(lubridate)
+library(caret)
+library(MASS)
+
+```
+
+```{r}
+#Loading the static house data
+statichouse_url <- 
+  "https://intro-datascience.s3.us-east-2.amazonaws.com/SC-data/static_house_info.parquet"
+
+Statichouse<- read_parquet(statichouse_url)
+
+#Saving the house data in rds file for backup
+saveRDS(Statichouse,"StaticHousedata.rds")
+
+#Read RDS file
+Statichouse<- readRDS("StaticHousedata.rds")
+
+#getwd()
+
+```
+
+```{r}
+#Loading the energy house data
+
+buildingids <- unique(Statichouse$bldg_id)
+
+for(buildingid in buildingids){
+  url <- paste0("https://intro-datascience.s3.us-east-2.amazonaws.com/SC-data/2023-houseData/",buildingid,".parquet")
+  
+  buildingdata<- read_parquet(url)
+  
+  if(!is.null(buildingdata)) {
+    buildingdata<- buildingdata[!is.na(buildingdata$time),]
+    buildingdata$month <- ifelse(!is.na(buildingdata$time), month(buildingdata$time), NA)
+    buildingdata <- buildingdata[buildingdata$month == 7, ]
+    buildingdata$total_energy <- rowSums(select(buildingdata, starts_with("out.electricity")), na.rm = TRUE)
+    daily_sums <- tapply(buildingdata$total_energy, buildingdata$time, sum, na.rm = TRUE)
+    buildingdata$bldgid <- buildingid
+    #buildingdata <- buildingdata[month(buildingdata$time)==7,]
+    buildingdatasummary<-data.frame(
+      bldg_id= rep(buildingid, length(daily_sums)),
+      time =as.POSIXct(buildingdata$time),
+      totalenergy = daily_sums
+    )
+    All_energy_data_1 <- bind_rows(All_energy_data_1,buildingdatasummary)
+    
+  }
+  
+}
+
+#Saving the building energy data as RDS file for backup
+saveRDS(All_energy_data_1,"Static_Energy_data.rds")
+
+#Reading the RDS file
+All_energy_data_1<-readRDS("Static_Energy_data.rds")
+```
+
+```{r}
+#Merging the  building energy data with the static house data
+Static_Energy_df <- Statichouse%>%
+  inner_join(All_energy_data_1, by ="bldg_id")
+
+nrow(Static_Energy_df)
+```
+```{r}
+#Loading the Weather data
+
+County_list <- unique(Statichouse$in.county)
+
+#Creating new weather data frame
+Counties_Weather_data<- data.frame()
+
+
+for (County in County_list) {
+  Weather_url <- paste0("https://intro-datascience.s3.us-east-2.amazonaws.com/SC-data/weather/2023-weather-data/",County,".csv")
+  Weatherdata<-read_csv(Weather_url)
+  
+  
+  if(!is.null(Weatherdata)){
+    Weatherdata$month <- ifelse(!is.na(Weatherdata$date_time), month(Weatherdata$date_time), NA)
+    Weatherdata <- Weatherdata[Weatherdata$month == 7 | is.na(Weatherdata$date_time), ]
+    Weatherdata$Countyid <- County
+    Counties_Weather_data <- bind_rows(Counties_Weather_data,Weatherdata)
+  }
+  
+}
+
+#Saving Weatherdata as an RDS file
+
+saveRDS(Counties_Weather_data, "WeatherData.rds")
+
+WeatherData<- readRDS("WeatherData.rds")
+nrow(Counties_Weather_data)
+
+```
+
+```{r}
+#Merging the Static_Energy_df data with the Weather data
+
+#Checking the timezone of the time variable and ensuring it to be same before merging the data based on time and county variable
+
+tz_var1 <- attr(Static_Energy_df$time, "tzone")
+tz_var2 <- attr(WeatherData$date_time, "tzone")
+
+Static_Energy_df$time <- force_tz(Static_Energy_df$time, tzone = "UTC")
+WeatherData$date_time <- force_tz(WeatherData$date_time, tzone = "UTC")
+
+
+
+```Static_Energy_weather <- Static_Energy_df%>%
+  inner_join(WeatherData%>% select(date_time, `Dry Bulb Temperature [°C]`, `Relative Humidity [%]`, `Wind Speed [m/s]`, `Wind Direction [Deg]`, `Global Horizontal Radiation [W/m2]`, `Direct Normal Radiation [W/m2]`, `Diffuse Horizontal Radiation [W/m2]`,Countyid), by = c("in.county"="Countyid","time"="date_time") )
+
+#Saving the Merged Dataset as RDS File for Backup
+saveRDS(Static_Energy_weather,"Static_Energy_weather.rds")
+
+#Reading RDS file
+Static_Energy_weather<-readRDS("Static_Energy_weather.rds")
+
+```
+
+```{r}
+#Data Validation
+
+Nas<-colSums(is.na(Static_Energy_weather))
+
+if(sum(Nas) > 0) {
+  print("There are missing values in the data frame.")
+} else {
+  print("No missing values in the data frame.")
+}
+
+#Confirming the row count to be 42,48,240
+Df_count<-nrow(Static_Energy_weather)
+print(Df_count)
+
+```
+
+```{r}
+#Creating linear model to predict the energy usage
+#Creating data partition based on total energy and dividing the data into train and test dataframe
+set.seed(123)
+
+train_index <- createDataPartition(Static_Energy_weather$totalenergy, p = 0.8, list = FALSE)
+train_data <- Static_Energy_weather[train_index, ]
+test_data <- Static_Energy_weather[-train_index, ]
+
+```
+
+```{r}
+ 
+lm <- lm(
+  totalenergy ~ 
+    `Dry Bulb Temperature [°C]` + 
+    in.hvac_cooling_type * `Dry Bulb Temperature [°C]` + 
+    in.hvac_cooling_type+
+    in.sqft + 
+    timezone + 
+    in.lighting +
+    in.occupants +
+    `Wind Speed [m/s]` + 
+    in.geometry_wall_type + 
+    `Relative Humidity [%]` * `Dry Bulb Temperature [°C]`,
+  data = train_data
+)
+summary(lm)
+```
+
+```{r}
+# Checking the accuracy of the model based on train data
+train_predictions <- predict(lm, train_data)
+
+median_energy <- median(train_data$totalenergy, na.rm = TRUE)
+
+# Convert totalenergy into a binary category: 1 if above median, 0 if below
+train_data$totalenergy_category <- ifelse(train_data$totalenergy > median_energy, 1, 0)
+#test_data$totalenergy_category <- ifelse(test_data$totalenergy > median_energy, 1, 0)
+
+#Converting the predicted values in binary 
+median_prob <- median(train_predictions)
+
+predictions_binary <- ifelse(train_predictions > median_prob, 1, 0)
+
+#Creating confusion Matrix to predict the accuracy
+
+# To use confusionMatrix function
+confusion_matrix <- confusionMatrix(factor(predictions_binary), factor(train_data$totalenergy_category))
+
+# Print the confusion matrix
+print(confusion_matrix)
+
+
+```
+
+```{r}
+
+# Generate predictions on the test data
+test_predictions <- predict(lm, test_data)
+
+# Convert totalenergy into a binary category in the test data based on the median of train data's totalenergy
+median_energy <- median(test_data$totalenergy, na.rm = TRUE)
+test_data$totalenergy_category <- ifelse(test_data$totalenergy > median_energy, 1, 0)
+
+# Convert the predicted values from the test data into binary based on the median of predictions
+median_prob <- median(test_predictions)
+test_predictions_binary <- ifelse(test_predictions > median_prob, 1, 0)
+
+# Create a confusion matrix to evaluate accuracy on the test data
+confusion_matrix_test <- confusionMatrix(factor(test_predictions_binary), factor(test_data$totalenergy_category))
+
+# Print the confusion matrix
+print(confusion_matrix_test)
+
+
+```
+
+```{r}
+#Creating new dataset with 5 degree increase in temperature
+Static_Energy_weather_01 <- Static_Energy_weather
+
+Static_Energy_weather_01$`Dry Bulb Temperature [°C]`<- Static_Energy_weather_01$`Dry Bulb Temperature [°C]`+5
+
+future_predictions <- predict(lm,Static_Energy_weather_01)
+head(future_predictions)
+
+# Find the maximum predicted energy demand (peak demand)
+peak_demand <- max(future_predictions)
+
+# Print the peak demand
+print(paste("Peak Future Energy Demand:", peak_demand))
+
+
+max(Static_Energy_weather$totalenergy)
+```
+
+Add a new chunk by clicking the *Insert Chunk* button on the toolbar or by pressing *Ctrl+Alt+I*.
+
+When you save the notebook, an HTML file containing the code and output will be saved alongside it (click the *Preview* button or press *Ctrl+Shift+K* to preview the HTML file).
+
+The preview shows you a rendered HTML copy of the contents of the editor. Consequently, unlike *Knit*, *Preview* does not run any R code chunks. Instead, the output of the chunk when it was last run in the editor is displayed.
