@@ -15,9 +15,9 @@ Data Collection and Preparation
 
 ## Datasets Used :
 
-Residential energy consumption data
-Weather data (temperature, humidity)
-Housing and geographic data
+Residential energy consumption data , 
+Weather data (temperature, humidity) , 
+Housing and geographic data.
 
 
 ## Data Processing Steps :
