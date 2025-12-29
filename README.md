@@ -34,7 +34,7 @@ The objective of this project is to analyze and forecast residential electricity
 - Assessed regional variations in energy demand
 
 ## Predictive Modeling for Demand Forecasting
-- **Models Implemented** : 
+**Models Implemented** : 
 - Linear Regression: Established baseline relationships between temperature and energy demand
 - XGBoost: Captured nonlinear interactions and improved prediction accuracy
 
