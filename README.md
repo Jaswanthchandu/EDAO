@@ -1,5 +1,5 @@
-# EDAO
-# Energy Demand Analysis and Optimization
+
+# Energy Demand Analysis and Prediction
 
 
 ## Project Overview
